@@ -1,0 +1,8 @@
+{
+  "name": "Copy of Arabic RT Intelligence Browser",
+  "description": "A sophisticated dashboard and generator for the RT Arabic scraping engine, featuring real-time extraction intelligence and full source code management.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
