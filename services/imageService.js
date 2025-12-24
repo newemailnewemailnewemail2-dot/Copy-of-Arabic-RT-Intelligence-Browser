@@ -9,7 +9,7 @@
  * 5. إرجاع الصورة كـ Base64 لتجاوز مشاكل الحماية
  */
 
-const { chromium } = require('playwright');
+import { chromium } from 'playwright';
 
 /**
  * استخراج الصورة الرئيسية والنص من صفحة الخبر
@@ -282,7 +282,7 @@ async function fetchImageAsBase64(imageUrl, pageUrl) {
   }
 }
 
-module.exports = {
+export {
   scrapeNewsArticle,
   fetchImageAsBase64
 };

@@ -4,7 +4,7 @@
  */
 
 // رابط الـ Backend - يمكن تغييره حسب البيئة
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://work-1-idhtzdjblnrzdanh.prod-runtime.all-hands.dev';
 
 export interface ScrapeResult {
   success: boolean;

@@ -1,15 +1,15 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { ArticleData } from "../types";
 
-const MODEL_NAME = 'gemini-3-flash-preview';
+const MODEL_NAME = 'gemini-1.5-flash';
 
 /**
  * محرك البحث والتحليل الاستخباراتي (RT-CORE)
  * تم تحديثه لضمان جودة الصور وقابليتها للنشر المباشر
  */
 export async function discoverySearch(query: string, timeframe: string, existingUrls: string[] = []): Promise<Partial<ArticleData>[]> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  const genAI = new GoogleGenerativeAI(process.env.API_KEY as string);
+  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
   
   const lastUrls = existingUrls.slice(-30);
 
@@ -35,31 +35,16 @@ export async function discoverySearch(query: string, timeframe: string, existing
 }]`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              url: { type: Type.STRING },
-              rewrittenTitle: { type: Type.STRING },
-              rewrittenContent: { type: Type.STRING },
-              imageUrl: { type: Type.STRING },
-              category: { type: Type.STRING },
-              threatLevel: { type: Type.STRING }
-            },
-            required: ["url", "rewrittenTitle", "rewrittenContent", "imageUrl", "category", "threatLevel"]
-          }
-        }
-      }
-    });
-
-    return JSON.parse(response.text || "[]");
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    // استخراج JSON من النص
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return [];
   } catch (error) {
     console.error("Discovery Engine Failure:", error);
     return [];

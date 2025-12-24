@@ -1,8 +1,7 @@
-
-const express = require('express');
-const cors = require('cors');
-const fetch = require('node-fetch');
-const { scrapeNewsArticle, fetchImageAsBase64 } = require('./services/imageService');
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+import { scrapeNewsArticle, fetchImageAsBase64 } from './services/imageService.js';
 
 const app = express();
 app.use(cors());
