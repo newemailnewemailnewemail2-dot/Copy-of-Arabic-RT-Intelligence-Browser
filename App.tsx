@@ -3,10 +3,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   LayoutDashboard, Zap, FileCode, Search, Trash2, Plus, Clock, ExternalLink, 
   Calendar, Infinity, Waves, Send, RefreshCw, MessageSquare, FileUp, Signal,
-  History, Database, Radio, ShieldAlert, Import, Globe, Cpu, Activity, CheckCircle2, AlertTriangle, FileText
+  History, Database, Radio, ShieldAlert, Import, Globe, Cpu, Activity, CheckCircle2, AlertTriangle, FileText,
+  Image, Link, Eye, Download, Loader2, Camera
 } from 'lucide-react';
 import { ViewMode, ArticleData, NewsSource } from './types';
 import { discoverySearch } from './services/ai';
+import { processArticle, scrapeArticle, checkBackendHealth, ScrapeResult } from './services/scraper';
 import { PythonCodeViewer } from './components/PythonCodeViewer';
 
 const App: React.FC = () => {
@@ -41,6 +43,12 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
+  // Smart Scraper States
+  const [scraperUrl, setScraperUrl] = useState("");
+  const [scraperResult, setScraperResult] = useState<ScrapeResult | null>(null);
+  const [isScraperProcessing, setIsScraperProcessing] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+
   const formatTime = (date: Date) => {
     return date.getHours().toString().padStart(2, '0') + ":" + 
            date.getMinutes().toString().padStart(2, '0');
@@ -72,6 +80,57 @@ const App: React.FC = () => {
     localStorage.setItem('rt_bot_name', botName);
   }, [history, sources, tgToken, tgChatId, tgConnectionStatus, botName]);
 
+  // التحقق من حالة الـ Backend عند التحميل
+  useEffect(() => {
+    const checkBackend = async () => {
+      const isOnline = await checkBackendHealth();
+      setBackendStatus(isOnline ? 'online' : 'offline');
+    };
+    checkBackend();
+    const interval = setInterval(checkBackend, 30000); // فحص كل 30 ثانية
+    return () => clearInterval(interval);
+  }, []);
+
+  // معالجة استخراج الخبر الذكي
+  const handleSmartScrape = async () => {
+    if (!scraperUrl) return;
+    setIsScraperProcessing(true);
+    setScraperResult(null);
+    
+    try {
+      const result = await processArticle(scraperUrl);
+      setScraperResult(result);
+    } catch (error: any) {
+      setScraperResult({ success: false, error: error.message });
+    }
+    
+    setIsScraperProcessing(false);
+  };
+
+  // إضافة الخبر المستخرج إلى جدول النشر
+  const addScrapedToScheduler = () => {
+    if (!scraperResult || !scraperResult.success) return;
+    
+    const newArticle: ArticleData = {
+      id: Math.random().toString(36).substr(2, 9),
+      url: scraperUrl,
+      originalTitle: scraperResult.originalTitle,
+      rewrittenTitle: scraperResult.rewrittenTitle || scraperResult.originalTitle || 'بدون عنوان',
+      rewrittenContent: scraperResult.rewrittenContent || scraperResult.originalContent || '',
+      category: scraperResult.category || 'عام',
+      threatLevel: scraperResult.threatLevel || 'عادي',
+      imageUrl: scraperResult.originalImageUrl || '',
+      imageBase64: scraperResult.imageBase64,
+      timestamp: Date.now(),
+      status: 'scheduled'
+    };
+    
+    setHistory(prev => applyAutoShifting([...prev, newArticle]));
+    setScraperResult(null);
+    setScraperUrl("");
+    setView(ViewMode.SCHEDULER);
+  };
+
   const performTelegramPublish = async (article: ArticleData): Promise<boolean> => {
     if (!tgToken || !tgChatId) return false;
     const token = tgToken.trim();
@@ -79,6 +138,35 @@ const App: React.FC = () => {
     const caption = `<b>${article.rewrittenTitle}</b>\n\n${article.rewrittenContent}\n\n<a href="${article.url}">المصدر الأصلي</a>\n\n#RT_Intelligence #عاجل`;
 
     try {
+      // الخطوة 0: إذا كانت الصورة Base64 (من Smart Scraper)، نرسلها مباشرة
+      if (article.imageBase64 && article.imageBase64.startsWith('data:')) {
+        try {
+          const base64Data = article.imageBase64.split(',')[1];
+          const byteCharacters = atob(base64Data);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: 'image/jpeg' });
+          
+          const formData = new FormData();
+          formData.append('chat_id', chat);
+          formData.append('photo', blob, 'news_image.jpg');
+          formData.append('caption', caption);
+          formData.append('parse_mode', 'HTML');
+          
+          const base64Resp = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { 
+            method: 'POST', 
+            body: formData 
+          });
+          const base64Data2 = await base64Resp.json();
+          if (base64Data2.ok) return true;
+        } catch (err) {
+          console.warn("Base64 upload failed, trying URL...");
+        }
+      }
+
       if (article.imageUrl && article.imageUrl.startsWith('http')) {
         // الخطوة 1: محاولة إرسال الصورة عبر الرابط المباشر (الأسرع)
         const linkResp = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
@@ -229,6 +317,7 @@ const App: React.FC = () => {
         <nav className="flex-1 p-4 space-y-1.5">
           {[
             { id: ViewMode.DASHBOARD, label: 'لوحة التحكم', icon: LayoutDashboard },
+            { id: ViewMode.SMART_SCRAPER, label: 'استخراج ذكي', icon: Camera },
             { id: ViewMode.DISCOVERY, label: 'رصد الأخبار الحية', icon: Globe },
             { id: ViewMode.INTEL_FEED, label: 'الأرشيف العام', icon: History },
             { id: ViewMode.SOURCES, label: 'إدارة المصادر', icon: Database },
@@ -289,6 +378,197 @@ const App: React.FC = () => {
             </div>
           )}
 
+          {view === ViewMode.SMART_SCRAPER && (
+            <div className="max-w-6xl mx-auto space-y-8 animate-fadeIn">
+              {/* حالة الـ Backend */}
+              <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl w-fit ${
+                backendStatus === 'online' ? 'bg-emerald-500/10 border border-emerald-500/20' :
+                backendStatus === 'offline' ? 'bg-rose-500/10 border border-rose-500/20' :
+                'bg-yellow-500/10 border border-yellow-500/20'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${
+                  backendStatus === 'online' ? 'bg-emerald-500 animate-pulse' :
+                  backendStatus === 'offline' ? 'bg-rose-500' :
+                  'bg-yellow-500 animate-pulse'
+                }`} />
+                <span className={`text-xs font-bold ${
+                  backendStatus === 'online' ? 'text-emerald-400' :
+                  backendStatus === 'offline' ? 'text-rose-400' :
+                  'text-yellow-400'
+                }`}>
+                  {backendStatus === 'online' ? 'خدمة الاستخراج الذكي متصلة' :
+                   backendStatus === 'offline' ? 'خدمة الاستخراج غير متصلة' :
+                   'جاري التحقق...'}
+                </span>
+              </div>
+
+              {/* واجهة الإدخال */}
+              <div className="bg-[#0d1321]/90 backdrop-blur-2xl p-10 md:p-14 rounded-[4rem] border border-cyan-500/20 shadow-[0_0_100px_rgba(6,182,212,0.05)] relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-96 h-96 bg-cyan-500/5 blur-[150px] rounded-full -ml-48 -mt-48"></div>
+                
+                <div className="relative z-10 text-center mb-10">
+                  <Camera className={`w-16 h-16 text-cyan-400 mx-auto mb-6 ${isScraperProcessing ? 'animate-bounce' : ''}`} />
+                  <h3 className="text-4xl font-black text-white mb-4">استخراج الأخبار الذكي</h3>
+                  <p className="text-slate-400 text-sm max-w-xl mx-auto">
+                    أدخل رابط أي خبر وسيقوم النظام باستخراج الصورة الرئيسية والنص تلقائياً باستخدام متصفح حقيقي
+                  </p>
+                </div>
+
+                <div className="relative z-10 max-w-3xl mx-auto">
+                  <div className="flex gap-4 mb-6">
+                    <input 
+                      type="url" 
+                      value={scraperUrl} 
+                      onChange={(e) => setScraperUrl(e.target.value)} 
+                      onKeyDown={(e) => e.key === 'Enter' && handleSmartScrape()}
+                      className="flex-1 bg-black/40 border border-white/10 rounded-2xl p-6 text-lg text-white outline-none focus:border-cyan-500/50 shadow-inner placeholder:text-slate-600" 
+                      placeholder="https://example.com/news/article..." 
+                      disabled={isScraperProcessing || backendStatus !== 'online'}
+                    />
+                    <button 
+                      onClick={handleSmartScrape} 
+                      disabled={isScraperProcessing || !scraperUrl || backendStatus !== 'online'} 
+                      className="px-8 py-4 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-30 disabled:cursor-not-allowed rounded-2xl font-black text-white transition-all shadow-lg active:scale-95 flex items-center gap-3"
+                    >
+                      {isScraperProcessing ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          <span>جاري الاستخراج...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-5 h-5" />
+                          <span>استخراج</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* شريط التقدم */}
+                  {isScraperProcessing && (
+                    <div className="bg-black/40 rounded-2xl p-6 border border-cyan-500/20">
+                      <div className="flex items-center gap-4 mb-4">
+                        <Loader2 className="w-6 h-6 text-cyan-400 animate-spin" />
+                        <span className="text-cyan-400 font-bold">جاري فتح الصفحة بالمتصفح الذكي...</span>
+                      </div>
+                      <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                        <div className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* نتيجة الاستخراج */}
+              {scraperResult && (
+                <div className={`bg-[#0d1321]/90 backdrop-blur-2xl p-10 rounded-[3rem] border ${
+                  scraperResult.success ? 'border-emerald-500/20' : 'border-rose-500/20'
+                } shadow-2xl`}>
+                  {scraperResult.success ? (
+                    <div className="space-y-8">
+                      {/* العنوان والحالة */}
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-4">
+                          <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                          <div>
+                            <h4 className="text-2xl font-black text-white">تم الاستخراج بنجاح!</h4>
+                            <p className="text-slate-500 text-sm">الصورة والنص جاهزان للنشر</p>
+                          </div>
+                        </div>
+                        <span className={`px-4 py-2 rounded-xl text-xs font-black ${
+                          scraperResult.threatLevel === 'عاجل' ? 'bg-rose-500/20 text-rose-400' :
+                          scraperResult.threatLevel === 'مهم' ? 'bg-yellow-500/20 text-yellow-400' :
+                          'bg-slate-500/20 text-slate-400'
+                        }`}>
+                          {scraperResult.threatLevel || 'عادي'}
+                        </span>
+                      </div>
+
+                      {/* المحتوى */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* الصورة */}
+                        <div className="space-y-4">
+                          <h5 className="text-sm font-black text-cyan-400 uppercase tracking-widest flex items-center gap-2">
+                            <Image className="w-4 h-4" /> الصورة المستخرجة
+                          </h5>
+                          <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black/40">
+                            {scraperResult.imageBase64 ? (
+                              <img 
+                                src={scraperResult.imageBase64} 
+                                alt="Extracted" 
+                                className="w-full h-64 object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-64 flex items-center justify-center text-slate-600">
+                                <Image className="w-16 h-16" />
+                              </div>
+                            )}
+                            {scraperResult.imageBase64 && (
+                              <div className="absolute bottom-3 right-3 bg-emerald-500/90 px-3 py-1 rounded-lg text-xs font-bold text-white">
+                                Base64 ✓
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* النص */}
+                        <div className="space-y-4">
+                          <h5 className="text-sm font-black text-cyan-400 uppercase tracking-widest flex items-center gap-2">
+                            <FileText className="w-4 h-4" /> المحتوى المعاد صياغته
+                          </h5>
+                          <div className="bg-black/40 rounded-2xl p-6 border border-white/10 space-y-4">
+                            <div>
+                              <span className="text-[10px] text-slate-500 uppercase tracking-widest">العنوان</span>
+                              <h6 className="text-lg font-black text-white mt-1">{scraperResult.rewrittenTitle || scraperResult.originalTitle}</h6>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-500 uppercase tracking-widest">المحتوى</span>
+                              <p className="text-sm text-slate-300 mt-1 line-clamp-6">{scraperResult.rewrittenContent || scraperResult.originalContent}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <span className="px-3 py-1 bg-cyan-500/20 text-cyan-400 rounded-lg text-xs font-bold">
+                                {scraperResult.category || 'عام'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* أزرار الإجراءات */}
+                      <div className="flex gap-4 justify-center pt-4">
+                        <button 
+                          onClick={addScrapedToScheduler}
+                          className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 rounded-2xl font-black text-white transition-all shadow-lg active:scale-95 flex items-center gap-3"
+                        >
+                          <Calendar className="w-5 h-5" />
+                          إضافة لجدول النشر
+                        </button>
+                        <button 
+                          onClick={() => setScraperResult(null)}
+                          className="px-8 py-4 bg-slate-700 hover:bg-slate-600 rounded-2xl font-bold text-white transition-all"
+                        >
+                          استخراج آخر
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-10">
+                      <AlertTriangle className="w-16 h-16 text-rose-500 mx-auto mb-4" />
+                      <h4 className="text-2xl font-black text-white mb-2">فشل الاستخراج</h4>
+                      <p className="text-rose-400">{scraperResult.error || 'حدث خطأ غير متوقع'}</p>
+                      <button 
+                        onClick={() => setScraperResult(null)}
+                        className="mt-6 px-8 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold text-white transition-all"
+                      >
+                        حاول مرة أخرى
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {view === ViewMode.DISCOVERY && (
             <div className="max-w-5xl mx-auto space-y-12 animate-fadeIn relative">
                <div className="bg-[#0d1321]/90 backdrop-blur-2xl p-10 md:p-14 rounded-[4rem] border border-emerald-500/20 shadow-[0_0_100px_rgba(16,185,129,0.05)] relative overflow-hidden text-center">
@@ -319,15 +599,20 @@ const App: React.FC = () => {
             <div className="max-w-6xl mx-auto space-y-6 animate-fadeIn">
                {history.sort((a,b) => b.timestamp - a.timestamp).map(item => (
                  <div key={item.id} className="bg-[#0d1321]/90 rounded-[2.5rem] border border-white/5 overflow-hidden flex flex-col md:flex-row shadow-2xl group transition-all hover:border-emerald-500/20">
-                    <div className="w-full md:w-72 h-48 md:h-auto overflow-hidden shrink-0">
+                    <div className="w-full md:w-72 h-48 md:h-auto overflow-hidden shrink-0 relative">
                       <img 
-                        src={item.imageUrl} 
+                        src={item.imageBase64 || item.imageUrl} 
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" 
                         onError={(e) => {
                           e.currentTarget.src = 'https://via.placeholder.com/800x450?text=RT+Intelligence';
                         }}
                       />
+                      {item.imageBase64 && (
+                        <div className="absolute top-2 right-2 bg-cyan-500/90 px-2 py-1 rounded text-[9px] font-bold text-white">
+                          Smart ✓
+                        </div>
+                      )}
                     </div>
                     <div className="p-8 flex-1">
                        <h4 className="text-xl font-black text-white mb-2">{item.rewrittenTitle}</h4>
@@ -359,8 +644,20 @@ const App: React.FC = () => {
             <div className="max-w-6xl mx-auto animate-fadeIn grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                {history.filter(i => i.status === 'scheduled').map(item => (
                  <div key={item.id} className="bg-[#0d1321] rounded-[3rem] border border-purple-500/20 overflow-hidden shadow-2xl group">
-                    <div className="h-40 overflow-hidden">
-                      <img src={item.imageUrl} referrerPolicy="no-referrer" className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
+                    <div className="h-40 overflow-hidden relative">
+                      <img 
+                        src={item.imageBase64 || item.imageUrl} 
+                        referrerPolicy="no-referrer" 
+                        className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity"
+                        onError={(e) => {
+                          e.currentTarget.src = 'https://via.placeholder.com/800x450?text=RT+Intelligence';
+                        }}
+                      />
+                      {item.imageBase64 && (
+                        <div className="absolute top-2 right-2 bg-cyan-500/90 px-2 py-1 rounded text-[9px] font-bold text-white">
+                          Smart ✓
+                        </div>
+                      )}
                     </div>
                     <div className="p-8 space-y-4">
                        <div className="flex items-center gap-3 text-purple-400">
